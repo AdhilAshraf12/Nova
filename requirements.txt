@@ -2,9 +2,7 @@ python-dotenv==1.0.1
 numpy==1.26.4
 sounddevice==0.4.7
 soundfile==0.12.1
-webrtcvad==2.0.10
 faster-whisper==1.0.3
 requests==2.32.3
-simpleaudio==1.0.4
 duckduckgo-search==6.3.7
 chromadb==0.5.5
