@@ -1,6 +1,8 @@
-# main.py
+# main.py  (diagnostic prints + robust loop)
 
-from nova.config import settings
+import sys
+import traceback
+
 from nova.memory import Memory
 from nova.tools import Tools
 from nova.agent import Agent
@@ -8,29 +10,58 @@ from speech.tts import TTS
 from speech.stt import STT
 from speech.wakeword import Wakeword
 
-print("Nova starting… (say 'nova' to wake)")
+def main():
+    print("Nova starting… (say 'nova' to wake)", flush=True)
 
-memory = Memory()
-tools = Tools(memory)
-agent = Agent(tools, memory)
+    try:
+        print("[init] memory", flush=True)
+        memory = Memory()
+        print("[init] tools", flush=True)
+        tools = Tools(memory)
+        print("[init] agent", flush=True)
+        agent = Agent(tools, memory)
+        print("[init] stt", flush=True)
+        stt = STT()
+        print("[init] tts", flush=True)
+        tts = TTS()
+        print("[init] wake", flush=True)
+        wake = Wakeword()
+        print("[ok] Initialized all components", flush=True)
+    except Exception as e:
+        print("[fatal] init failed:", repr(e), flush=True)
+        traceback.print_exc()
+        sys.exit(1)
 
-stt = STT()
-tts = TTS()
-wake = Wakeword()
+    try:
+        while True:
+            print("Listening…", flush=True)
+            text = stt.record_utterance()
+            print("You (raw):", repr(text), flush=True)
+            if not text:
+                continue
 
-while True:
-    print("Listening…")
-    text = stt.record_utterance()
-    if not text:
-        continue
-    print("You (raw):", repr(text))
+            if wake.detected(text):
+                try:
+                    tts.speak("Hey, what's up?")
+                except Exception as e:
+                    print("[warn] TTS speak failed:", repr(e), flush=True)
 
-    if wake.detected(text):
-        tts.speak("Hey, what's up?")
-        cmd = stt.record_utterance()
-        if not cmd:
-            continue
-        print("Cmd:", cmd)
-        reply = agent.ask(cmd)
-        print("Nova:", reply)
-        tts.speak(reply if isinstance(reply, str) else str(reply))
+                cmd = stt.record_utterance()
+                print("Cmd:", repr(cmd), flush=True)
+                if not cmd:
+                    continue
+
+                reply = agent.ask(cmd)
+                print("Nova:", reply, flush=True)
+                try:
+                    tts.speak(reply if isinstance(reply, str) else str(reply))
+                except Exception as e:
+                    print("[warn] TTS speak failed:", repr(e), flush=True)
+    except KeyboardInterrupt:
+        print("\n[exit] KeyboardInterrupt", flush=True)
+    except Exception as e:
+        print("[fatal] runtime error:", repr(e), flush=True)
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    main()

@@ -3,8 +3,23 @@
 import json
 import requests
 from .config import settings
+from pathlib import Path
 
-SYSTEM_PROMPT = open("data/prompts/system.txt", "r", encoding="utf-8").read()
+def _load_system_prompt() -> str:
+    p = Path("data/prompts/system.txt")
+    if p.exists():
+        try:
+            return p.read_text(encoding="utf-8")
+        except Exception:
+            pass
+    # Fallback if the file is missing or unreadable
+    return (
+        "You are Nova, a concise, helpful local assistant. "
+        "If a tool is required, respond with a JSON object like "
+        '{"tool":"<name>","args":{...}}. Otherwise reply plainly.'
+    )
+
+SYSTEM_PROMPT = _load_system_prompt()
 
 class LLMOffline(Exception):
     pass
@@ -15,7 +30,6 @@ class LLM:
         self.model = settings.ollama_model
 
     def _health(self):
-        # quick ping; if Ollama isn't running, this will fail fast
         try:
             r = requests.get(f"{self.base}/api/tags", timeout=1.5)
             r.raise_for_status()
@@ -45,13 +59,12 @@ class Agent:
         self.history.append({"role": "user", "content": user_text})
         try:
             content = self.llm.chat(self.history)
-        except LLMOffline as e:
-            # Return a short, user-facing string instead of crashing
+        except LLMOffline:
             content = "LLM offline. Start Ollama and pull a model."
         except requests.RequestException as e:
             content = f"LLM error: {e.__class__.__name__}"
 
-        # Try tool-call convention
+        # Tool-call attempt
         try:
             maybe = json.loads(content)
             if isinstance(maybe, dict) and "tool" in maybe:

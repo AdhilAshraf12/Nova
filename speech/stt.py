@@ -1,5 +1,4 @@
-# speech/stt.py
-
+# speech/stt.py  (lazy Whisper init + RMS debug)
 import queue
 import numpy as np
 import sounddevice as sd
@@ -7,34 +6,40 @@ from faster_whisper import WhisperModel
 from nova.config import settings
 
 SAMPLE_RATE = 16000
-RMS_THRESHOLD = 0.0004   # lowered to match your ~0.00053 readings
+RMS_THRESHOLD = 0.00025   # matches your ~0.00030–0.00034 noise floor
 MIN_SPEECH_MS = 300
 MAX_SILENCE_MS = 1200
 PRE_SPEECH_MS = 200
 
 class STT:
     def __init__(self):
-        # Force CPU to avoid missing cuDNN / CUDA errors on Windows
-        self.model = WhisperModel(
-            settings.whisper_model,
-            device="cpu",
-            compute_type=settings.whisper_compute
-        )
+        self.model = None  # lazy init to avoid early crashes
         self.audio_q = queue.Queue()
         self.pre_buffer = []
         self.pre_ms = 0
+
+    def _ensure_model(self):
+        if self.model is None:
+            self.model = WhisperModel(
+                settings.whisper_model,
+                device="cpu",                      # avoid CUDA/cuDNN issues
+                compute_type=settings.whisper_compute
+            )
 
     def _audio_callback(self, indata, frames, time, status):
         if status:
             pass
         self.audio_q.put(indata.copy())
 
-    def _rms(self, x: np.ndarray) -> float:
+    @staticmethod
+    def _rms(x: np.ndarray) -> float:
         if x.size == 0:
             return 0.0
         return float(np.sqrt(np.mean(np.square(x))))
 
     def record_utterance(self):
+        self._ensure_model()
+
         speech_ms = 0
         silence_ms = 0
         started = False
@@ -60,7 +65,7 @@ class STT:
                         self.pre_ms -= int(len(drop) * 1000 / SAMPLE_RATE)
 
                 rms = self._rms(mono)
-                print(f"RMS: {rms:.5f}")  # live mic level
+                print(f"RMS: {rms:.5f}", flush=True)  # live mic level
                 is_voice = rms >= RMS_THRESHOLD
 
                 if is_voice:
