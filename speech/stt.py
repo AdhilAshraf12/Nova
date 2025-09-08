@@ -1,112 +1,91 @@
-import os
-import time
+# speech/stt.py
+
 import queue
 import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
 from nova.config import settings
 
-# Force CPU (avoid CUDA/cuDNN issues)
-os.environ["CT2_FORCE_CPU"] = "1"
-
 SAMPLE_RATE = 16000
-FRAME_MS = 20
-RMS_THRESHOLD = 0.006   # LOWERED so it starts more easily
-MIN_SPEECH_MS = 200     # a little snappier
-MAX_SILENCE_MS = 600
-GET_TIMEOUT_SEC = 5.0   # queue get timeout so we don’t hang if mic stops
-LISTEN_WINDOW_MS = 7000 # HARD CAP: if no speech starts in ~7s, we bail
-
-DEBUG = False  # set True to print RMS values
+RMS_THRESHOLD = 0.0004   # lowered to match your ~0.00053 readings
+MIN_SPEECH_MS = 300
+MAX_SILENCE_MS = 1200
+PRE_SPEECH_MS = 200
 
 class STT:
-    def __init__(self, input_device_index=None):
-        sd.default.samplerate = SAMPLE_RATE
-        if input_device_index is not None:
-            sd.default.device = (input_device_index, None)
-
+    def __init__(self):
+        # Force CPU to avoid missing cuDNN / CUDA errors on Windows
         self.model = WhisperModel(
             settings.whisper_model,
             device="cpu",
             compute_type=settings.whisper_compute
         )
         self.audio_q = queue.Queue()
+        self.pre_buffer = []
+        self.pre_ms = 0
 
-    def _audio_callback(self, indata, frames, time_info, status):
-        if status and DEBUG:
-            print("[STT] status:", status)
+    def _audio_callback(self, indata, frames, time, status):
+        if status:
+            pass
         self.audio_q.put(indata.copy())
 
     def _rms(self, x: np.ndarray) -> float:
+        if x.size == 0:
+            return 0.0
         return float(np.sqrt(np.mean(np.square(x))))
 
     def record_utterance(self):
-        start_time = time.time()
-        frame_samples = int(SAMPLE_RATE * FRAME_MS / 1000)
         speech_ms = 0
         silence_ms = 0
         started = False
         collected = []
 
-        try:
-            stream = sd.InputStream(
-                samplerate=SAMPLE_RATE,
-                channels=1,
-                dtype="float32",
-                callback=self._audio_callback
-            )
-        except Exception as e:
-            print(f"[STT] Could not open microphone: {e}")
-            return ""
-
+        stream = sd.InputStream(
+            samplerate=SAMPLE_RATE,
+            channels=1,
+            dtype='float32',
+            callback=self._audio_callback
+        )
         with stream:
             while True:
-                # Hard listen window to avoid “stuck on Listening…”
-                if (time.time() - start_time) * 1000 >= LISTEN_WINDOW_MS and not started:
-                    if DEBUG:
-                        print("[STT] listen window expired without voice")
-                    return ""
+                buf = self.audio_q.get()
+                mono = buf[:, 0]
+                chunk_ms = int(len(mono) * 1000 / SAMPLE_RATE)
 
-                try:
-                    buf = self.audio_q.get(timeout=GET_TIMEOUT_SEC)
-                except queue.Empty:
-                    print("[STT] No audio received from mic (timeout).")
-                    return ""
+                if not started:
+                    self.pre_buffer.append(mono)
+                    self.pre_ms += chunk_ms
+                    while self.pre_ms > PRE_SPEECH_MS and len(self.pre_buffer) > 1:
+                        drop = self.pre_buffer.pop(0)
+                        self.pre_ms -= int(len(drop) * 1000 / SAMPLE_RATE)
 
-                # Pad/truncate to a single analysis frame
-                if buf.shape[0] != frame_samples:
-                    if buf.shape[0] > frame_samples:
-                        buf = buf[:frame_samples]
-                    else:
-                        pad = np.zeros((frame_samples - buf.shape[0], 1), dtype=np.float32)
-                        buf = np.vstack([buf, pad])
-
-                rms = self._rms(buf[:, 0])
-                if DEBUG:
-                    print(f"[STT] rms={rms:.4f} (thr={RMS_THRESHOLD})")
-
+                rms = self._rms(mono)
+                print(f"RMS: {rms:.5f}")  # live mic level
                 is_voice = rms >= RMS_THRESHOLD
 
                 if is_voice:
-                    speech_ms += FRAME_MS
                     silence_ms = 0
+                    speech_ms += chunk_ms
                     if not started and speech_ms >= MIN_SPEECH_MS:
                         started = True
+                        if self.pre_buffer:
+                            collected.extend(self.pre_buffer)
+                            self.pre_buffer = []
+                            self.pre_ms = 0
                     if started:
-                        collected.append(buf[:, 0])
+                        collected.append(mono)
                 else:
-                    speech_ms = 0 if not started else speech_ms
                     if started:
-                        silence_ms += FRAME_MS
-                        collected.append(buf[:, 0])
+                        silence_ms += chunk_ms
+                        collected.append(mono)
                         if silence_ms >= MAX_SILENCE_MS:
                             break
+                    else:
+                        speech_ms = 0
 
         if not collected:
-            # Nothing captured (likely threshold too high or you didn’t speak)
             return ""
-
         audio = np.concatenate(collected, axis=0)
-        segments, _ = self.model.transcribe(audio, language="en")
-        text = "".join(seg.text for seg in segments).strip()
+        segments, _ = self.model.transcribe(audio, language='en')
+        text = ''.join(seg.text for seg in segments).strip()
         return text

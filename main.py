@@ -1,3 +1,5 @@
+# main.py
+
 from nova.config import settings
 from nova.memory import Memory
 from nova.tools import Tools
@@ -11,35 +13,24 @@ print("Nova starting… (say 'nova' to wake)")
 memory = Memory()
 tools = Tools(memory)
 agent = Agent(tools, memory)
-stt = STT()  # optionally STT(input_device_index=YOUR_MIC_INDEX)
+
+stt = STT()
 tts = TTS()
 wake = Wakeword()
 
 while True:
     print("Listening…")
     text = stt.record_utterance()
-    print(f"You (raw): {text!r}")  # shows empty vs actual
-
     if not text:
-        # Nothing captured this round; loop again
         continue
+    print("You (raw):", repr(text))
 
     if wake.detected(text):
-        # If the user said "nova <command>" in one sentence, try to use the same text
-        after = text.lower().split(wake.key, 1)[-1].strip()
-        if after:
-            cmd = after
-        else:
-            tts.speak("Hey, what's up?")
-            cmd = stt.record_utterance()
-            print(f"Cmd: {cmd!r}")
-
+        tts.speak("Hey, what's up?")
+        cmd = stt.record_utterance()
         if not cmd:
             continue
-
+        print("Cmd:", cmd)
         reply = agent.ask(cmd)
         print("Nova:", reply)
         tts.speak(reply if isinstance(reply, str) else str(reply))
-    else:
-        # Not a wake phrase—ignore or do passive actions here
-        pass
