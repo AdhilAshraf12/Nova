@@ -65,7 +65,7 @@ class STT:
                         self.pre_ms -= int(len(drop) * 1000 / SAMPLE_RATE)
 
                 rms = self._rms(mono)
-                print(f"RMS: {rms:.5f}", flush=True)  # live mic level
+                # print(f"RMS: {rms:.5f}", flush=True)  # live mic level
                 is_voice = rms >= RMS_THRESHOLD
 
                 if is_voice:
